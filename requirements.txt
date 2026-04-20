@@ -1,15 +1,8 @@
-# Telegram Bot (Asenkron destekli tam sürüm)
-python-telegram-bot[ext]
-
-# HTTP İstemci
-httpx
-
-# Veri İşleme
-feedparser
-
-# HTML Parsing
-beautifulsoup4
-lxml
-
-# Loglama
-loguru
+python-telegram-bot[ext]==22.7
+httpx==0.28.1
+feedparser==6.0.12
+beautifulsoup4==4.14.3
+lxml==6.1.0
+loguru==0.7.3
+groq==0.5.0
+gTTS==2.5.1
