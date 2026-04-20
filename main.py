@@ -32,15 +32,35 @@ class ContentEngine:
             self.groq_client = None
 
     async def get_reddit_news(self):
-        url = "https://www.reddit.com/r/technology/top/.rss?t=day"
-        try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-                feed = feedparser.parse(response.text)
-                if feed.entries:
-                    return {"title": feed.entries[0].title, "link": feed.entries[0].link}
-        except Exception as e:
-            logger.error(f"Reddit Hatası: {e}")
+        # Reddit bot engelini aşmak için gerçekçi tarayıcı kimliği
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        
+        # Denenecek kaynaklar (Biri hata verirse diğeri çalışır)
+        urls = [
+            "https://www.reddit.com/r/technology/top/.rss?t=day",
+            "https://www.reddit.com/r/tech/top/.rss?t=day"
+        ]
+
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            for url in urls:
+                try:
+                    logger.info(f"Haber taranıyor: {url}")
+                    response = await client.get(url, headers=headers)
+                    
+                    if response.status_code == 200:
+                        feed = feedparser.parse(response.text)
+                        if feed.entries:
+                            entry = feed.entries[0]
+                            logger.info(f"✅ Başarıyla haber çekildi: {entry.title}")
+                            return {"title": entry.title, "link": entry.link}
+                    else:
+                        logger.warning(f"Reddit yanıt vermedi ({url}): Durum Kodu {response.status_code}")
+                except Exception as e:
+                    logger.error(f"Bağlantı hatası ({url}): {e}")
+                    continue
+        
         return None
 
     def process_with_groq(self, news_title):
@@ -58,14 +78,14 @@ class ContentEngine:
             logger.error(f"Groq Hatası: {e}")
             return f"Günün öne çıkan haberi: {news_title}"
 
-    async def fetch_pexels_video(self, query="cyberpunk technology"):
+    async def fetch_pexels_video(self, query="modern technology"):
         if not self.cfg.PEXELS_API_KEY:
             return None
         
         headers = {"Authorization": self.cfg.PEXELS_API_KEY}
         url = f"https://api.pexels.com/videos/search?query={query}&per_page=1&orientation=portrait"
         try:
-            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                 response = await client.get(url, headers=headers)
                 data = response.json()
                 if data.get('videos'):
@@ -74,14 +94,14 @@ class ContentEngine:
             logger.error(f"Pexels Hatası: {e}")
         return None
 
-# --- RENDER PORT DİNLEYİCİ (8080 yerine 10000 denemesi) ---
+# --- RENDER PORT DİNLEYİCİ ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     handler = http.server.SimpleHTTPRequestHandler
     socketserver.TCPServer.allow_reuse_address = True
     try:
         with socketserver.TCPServer(("", port), handler) as httpd:
-            logger.info(f"✅ Port {port} aktif. Render hazır.")
+            logger.info(f"✅ Port {port} aktif. Render bağlantısı başarılı.")
             httpd.serve_forever()
     except Exception as e:
         logger.error(f"Sunucu Hatası: {e}")
@@ -92,7 +112,7 @@ class TelegramBot:
         self.cfg = cfg
         self.engine = ContentEngine(cfg)
         
-        # KRİTİK GÜNCELLEME: Python 3.14 uyumluluğu için job_queue(None) eklendi
+        # Python 3.14+ uyumluluğu için job_queue devre dışı bırakıldı
         self.app = (
             Application.builder()
             .token(cfg.TELEGRAM_BOT_TOKEN)
@@ -107,24 +127,25 @@ class TelegramBot:
         await update.message.reply_text("🚀 Protokolos Hazır!\n\n/teknoviral yazarak Reddit gündemini sesli video olarak alabilirsin.")
 
     async def cmd_teknoviral(self, update: Update, context: CallbackContext):
-        status = await update.message.reply_text("🌐 Veriler çekiliyor...")
+        status = await update.message.reply_text("🌐 Güncel teknoloji haberleri taranıyor...")
         
         try:
-            # 1. Reddit
+            # 1. Reddit'ten Haber Çek
             news = await self.engine.get_reddit_news()
             if not news:
-                await status.edit_text("❌ Haber bulunamadı.")
+                await status.edit_text("⚠️ Şu an Reddit'ten haber çekilemedi. Lütfen birkaç dakika sonra tekrar deneyin.")
                 return
 
-            # 2. Groq & TTS
-            await status.edit_text("🎙️ Seslendiriliyor...")
+            # 2. Groq ile Metin Oluştur ve Seslendir
+            await status.edit_text("🎙️ Haber analiz ediliyor ve seslendiriliyor...")
             metin = self.engine.process_with_groq(news['title'])
+            
             audio_file = f"audio_{update.message.message_id}.mp3"
             tts = gTTS(text=metin, lang='tr')
             tts.save(audio_file)
 
-            # 3. Pexels Video
-            await status.edit_text("🎬 Video arka planı hazırlanıyor...")
+            # 3. Pexels'ten Video Bul
+            await status.edit_text("🎬 Arka plan videosu hazırlanıyor...")
             video_url = await self.engine.fetch_pexels_video()
 
             # 4. Gönderim
@@ -134,19 +155,19 @@ class TelegramBot:
                 await update.message.reply_video(video=video_url, caption=caption, parse_mode="Markdown")
             
             with open(audio_file, "rb") as audio:
-                await update.message.reply_audio(audio=audio, title="Teknoloji Gündemi")
+                await update.message.reply_audio(audio=audio, title="Protokolos Teknoloji Özeti")
 
-            # Temizlik
+            # Dosya Temizliği
             if os.path.exists(audio_file):
                 os.remove(audio_file)
             await status.delete()
 
         except Exception as e:
-            logger.error(f"İşlem Hatası: {e}")
-            await status.edit_text(f"⚠️ Hata oluştu: {str(e)}")
+            logger.error(f"Genel İşlem Hatası: {e}")
+            await status.edit_text(f"⚠️ Bir hata oluştu: İşlem tamamlanamadı.")
 
     def run(self):
-        logger.info("📡 Bot dinlemeye başladı...")
+        logger.info("📡 Bot aktif, komutlar bekleniyor...")
         self.app.run_polling(drop_pending_updates=True)
 
 # --- ANA PROGRAM ---
@@ -154,7 +175,7 @@ if __name__ == "__main__":
     cfg = Config()
     
     if not cfg.TELEGRAM_BOT_TOKEN:
-        logger.critical("HATA: Bot Token bulunamadı!")
+        logger.critical("HATA: TELEGRAM_BOT_TOKEN eksik!")
         sys.exit(1)
 
     # Render için HTTP sunucusunu arka planda başlat
@@ -165,4 +186,4 @@ if __name__ == "__main__":
     try:
         bot.run()
     except Exception as e:
-        logger.error(f"Bot durduruldu: {e}")
+        logger.error(f"Bot beklenmedik şekilde durdu: {e}")
