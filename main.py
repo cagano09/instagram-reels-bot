@@ -1,12 +1,11 @@
 import os
 import sys
-import asyncio
 import threading
 import http.server
 import socketserver
 import feedparser
 import httpx
-from pathlib import Path
+import random
 from loguru import logger
 from gtts import gTTS
 from groq import Groq
@@ -20,154 +19,125 @@ class Config:
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
         self.PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
-# --- İÇERİK MOTORU ---
 class ContentEngine:
     def __init__(self, cfg):
         self.cfg = cfg
-        if cfg.GROQ_API_KEY:
-            self.groq_client = Groq(api_key=cfg.GROQ_API_KEY)
-        else:
-            self.groq_client = None
+        self.groq_client = Groq(api_key=cfg.GROQ_API_KEY) if cfg.GROQ_API_KEY else None
 
     async def get_google_tech_news(self):
-        # Reddit engelini aşmak için Google News RSS kullanıyoruz (Çok daha stabil)
         url = "https://news.google.com/rss/search?q=technology+when:1d&hl=en-US&gl=US&ceid=US:en"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                logger.info("Google News taranıyor...")
                 response = await client.get(url, headers=headers)
-                
                 if response.status_code == 200:
                     feed = feedparser.parse(response.text)
                     if feed.entries:
-                        # En güncel haberi al
-                        entry = feed.entries[0]
-                        logger.info(f"✅ Haber çekildi: {entry.title}")
-                        return {"title": entry.title, "link": entry.link}
-                else:
-                    logger.error(f"Google News Hatası: {response.status_code}")
+                        return {"title": feed.entries[0].title, "link": feed.entries[0].link}
             except Exception as e:
                 logger.error(f"Haber çekme hatası: {e}")
-        
         return None
 
     def process_with_groq(self, news_title):
-        if not self.groq_client:
-            return "Haber detayı analiz edilemedi."
-        
-        prompt = f"Şu teknoloji haberini viral bir kısa video için heyecanlı, akıcı bir Türkçe ile özetle. Sadece seslendirilecek metni ver, ek açıklama yapma: {news_title}"
+        prompt = f"Şu haberi viral bir kısa video için heyecanlı bir dille Türkçe özetle. Sadece seslendirilecek metni ver: {news_title}"
         try:
             completion = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama3-8b-8192",
             )
             return completion.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Groq Hatası: {e}")
-            return f"Teknoloji dünyasında yeni gelişme: {news_title}"
+        except:
+            return f"Yeni bir teknoloji gelişmesi: {news_title}"
 
-    async def fetch_pexels_video(self, query="future technology"):
-        if not self.cfg.PEXELS_API_KEY:
-            return None
-        
+    async def fetch_pexels_video(self, query="artificial intelligence"):
+        if not self.cfg.PEXELS_API_KEY: return None
         headers = {"Authorization": self.cfg.PEXELS_API_KEY}
-        # Arama terimini çeşitlendiriyoruz
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page=3&orientation=portrait"
+        # HD ve Portrait (Dikey) videoları zorla
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=5&orientation=portrait&size=medium"
         try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=25.0) as client:
                 response = await client.get(url, headers=headers)
                 data = response.json()
                 if data.get('videos'):
-                    # Rastgele bir video seç (hep aynısı gelmesin)
-                    import random
-                    video = random.choice(data['videos'])
-                    return video['video_files'][0]['link']
+                    # Filtreleme: En az 10 saniyelik ve video dosyası olanları seç
+                    valid_videos = [v for v in data['videos'] if v['duration'] > 5]
+                    video = random.choice(valid_videos if valid_videos else data['videos'])
+                    # En yüksek kaliteli mp4 linkini bul (genellikle linklerin içinde hd/sd yazar)
+                    video_files = video['video_files']
+                    best_link = sorted(video_files, key=lambda x: x.get('width', 0), reverse=True)[0]['link']
+                    return best_link
         except Exception as e:
             logger.error(f"Pexels Hatası: {e}")
         return None
-
-# --- RENDER PORT DİNLEYİCİ ---
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    handler = http.server.SimpleHTTPRequestHandler
-    socketserver.TCPServer.allow_reuse_address = True
-    try:
-        with socketserver.TCPServer(("", port), handler) as httpd:
-            logger.info(f"✅ Port {port} aktif.")
-            httpd.serve_forever()
-    except Exception as e:
-        logger.error(f"Sunucu Hatası: {e}")
 
 # --- TELEGRAM BOT ---
 class TelegramBot:
     def __init__(self, cfg):
         self.cfg = cfg
         self.engine = ContentEngine(cfg)
-        self.app = (
-            Application.builder()
-            .token(cfg.TELEGRAM_BOT_TOKEN)
-            .job_queue(None) 
-            .build()
-        )
+        self.app = Application.builder().token(cfg.TELEGRAM_BOT_TOKEN).job_queue(None).build()
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("teknoviral", self.cmd_teknoviral))
 
     async def cmd_start(self, update: Update, context: CallbackContext):
-        await update.message.reply_text("🚀 Protokolos Bot Hazır!\n\n/teknoviral yazarak en güncel teknoloji haberini video olarak alabilirsin.")
+        await update.message.reply_text("🚀 Protokolos Hazır! /teknoviral komutunu kullanın.")
 
     async def cmd_teknoviral(self, update: Update, context: CallbackContext):
-        status = await update.message.reply_text("🔍 Güncel haberler taranıyor...")
+        status = await update.message.reply_text("🎬 Video ve Ses hazırlanıyor...")
         
         try:
-            # 1. Google News'ten Haber Çek
             news = await self.engine.get_google_tech_news()
             if not news:
-                await status.edit_text("⚠️ Haber kaynağına şu an ulaşılamıyor.")
+                await status.edit_text("⚠️ Haber alınamadı.")
                 return
 
-            # 2. İşleme ve Seslendirme
-            await status.edit_text("🎙️ Haber seslendiriliyor...")
             metin = self.engine.process_with_groq(news['title'])
-            
-            audio_file = f"audio_{update.message.message_id}.mp3"
-            tts = gTTS(text=metin, lang='tr')
-            tts.save(audio_file)
-
-            # 3. Video Bulma
-            await status.edit_text("🎬 Video hazırlanıyor...")
             video_url = await self.engine.fetch_pexels_video()
+            
+            # Ses dosyasını geçici olarak oluştur
+            audio_path = f"audio_{update.message.message_id}.mp3"
+            tts = gTTS(text=metin, lang='tr')
+            tts.save(audio_path)
 
-            # 4. Gönderim
-            caption = f"🔥 **Günün Teknoloji Gündemi**\n\n{news['title']}\n\n#teknoloji #haber #protokolos"
+            caption = f"📰 **Gündem:** {news['title']}\n\n🎙️ **Özet:** {metin}"
+
+            # --- GÖNDERİM STRATEJİSİ ---
+            # Birleştirme işlemi (Render'da riskli olduğu için) yerine 
+            # videoyu gönderip sesi onun 'ses izi' gibi algılanması için hemen peşine atıyoruz.
+            # Şimdilik kullanıcı deneyimi için videoyu üstte, sesi altta tutuyoruz.
             
             if video_url:
-                await update.message.reply_video(video=video_url, caption=caption, parse_mode="Markdown")
+                # Videoyu gönder
+                sent_video = await update.message.reply_video(
+                    video=video_url, 
+                    caption=caption, 
+                    parse_mode="Markdown"
+                )
+                # Sesi, videonun altına 'cevap' olarak gönder (Böylece daha bütünleşik görünür)
+                with open(audio_path, "rb") as audio:
+                    await update.message.reply_audio(
+                        audio=audio, 
+                        title="Haber Seslendirmesi",
+                        reply_to_message_id=sent_video.message_id
+                    )
             
-            with open(audio_file, "rb") as audio:
-                await update.message.reply_audio(audio=audio, title="Teknoloji Özeti")
-
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
+            if os.path.exists(audio_path): os.remove(audio_path)
             await status.delete()
 
         except Exception as e:
             logger.error(f"Hata: {e}")
-            await status.edit_text("⚠️ Bir hata oluştu, tekrar deneniyor...")
+            await status.edit_text("⚠️ Bir hata oluştu.")
 
     def run(self):
-        logger.info("📡 Bot çalışıyor...")
         self.app.run_polling(drop_pending_updates=True)
+
+# --- PORT VE START ---
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as httpd:
+        httpd.serve_forever()
 
 if __name__ == "__main__":
     cfg = Config()
-    if not cfg.TELEGRAM_BOT_TOKEN:
-        sys.exit(1)
-
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    bot = TelegramBot(cfg)
-    bot.run()
+    TelegramBot(cfg).run()
