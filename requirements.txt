@@ -1,15 +1,10 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# INSTAGRAM REELS BOT - BASİT REQUIREMENTS
-# Bağımlılık çakışmalarını önlemek için minimal paket listesi
-# ═══════════════════════════════════════════════════════════════════════════════
+# Telegram Bot (Asenkron destekli tam sürüm)
+python-telegram-bot[ext]
 
-# Telegram Bot - Mesajlaşma
-python-telegram-bot
-
-# HTTP İstemci - API çağrıları için
+# HTTP İstemci
 httpx
 
-# Veri İşleme - RSS parsing
+# Veri İşleme
 feedparser
 
 # HTML Parsing
