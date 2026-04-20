@@ -1,22 +1,19 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# INSTAGRAM REELS BOT - MINIMAL REQUIREMENTS
-# Bu dosya Render'da sorunsuz kurulum için optimize edilmiştir
+# INSTAGRAM REELS BOT - BASİT REQUIREMENTS
+# Bağımlılık çakışmalarını önlemek için minimal paket listesi
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Telegram Bot - Asenkron mesajlaşma
-python-telegram-bot==20.7
+# Telegram Bot - Mesajlaşma
+python-telegram-bot
 
-# HTTP İstemciler - API çağrıları için
-httpx==0.27.0
-requests==2.32.3
+# HTTP İstemci - API çağrıları için
+httpx
 
-# Yapay Zeka - İçerik üretimi için (Groq API)
-# groq paketi yerine httpx kullanıyoruz, böylece ek bağımlılık yok
+# Veri İşleme - RSS parsing
+feedparser
 
-# Veri İşleme - RSS ve web parsing
-feedparser==6.0.11
-beautifulsoup4==4.12.3
-lxml==5.2.2
+# HTML Parsing
+beautifulsoup4
 
-# Yardımcı Araçlar - Loglama
-loguru==0.7.2
+# Loglama
+loguru
