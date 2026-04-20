@@ -1,7 +1,9 @@
 import os
 import sys
 import asyncio
-import sqlite3
+import threading
+import http.server
+import socketserver
 from pathlib import Path
 from loguru import logger
 from telegram import Update
@@ -10,51 +12,57 @@ from telegram.ext import Application, CommandHandler, CallbackContext
 # --- YAPILANDIRMA ---
 class Config:
     def __init__(self):
+        # Render'dan gelen veya manuel girilen Token
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        # Veritabanı yolu
         self.DB_PATH = Path("data") / "bot.db"
         self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# --- RENDER PORT KANDIRMA SİSTEMİ (DUMMY SERVER) ---
+def run_dummy_server():
+    """Render'ın 'Port scan timeout' hatasını önlemek için basit bir HTTP sunucusu başlatır."""
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    # 'Allow reuse address' hatayı önlemek için önemli
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer(("", port), handler) as httpd:
+            logger.info(f"🚀 Render Port Dinleyici {port} üzerinde aktif.")
+            httpd.serve_forever()
+    except Exception as e:
+        logger.error(f"Sahte sunucu başlatılamadı: {e}")
 
 # --- BOT SINIFI ---
 class TelegramBot:
     def __init__(self, cfg):
         self.config = cfg
-        # Application nesnesini oluşturuyoruz ama henüz başlatmıyoruz
+        # Application nesnesi
         self.app = Application.builder().token(cfg.TELEGRAM_BOT_TOKEN).build()
         
-        # Handler'ları ekle
+        # Komutları kaydet
         self.app.add_handler(CommandHandler("start", self.cmd_start))
 
     async def cmd_start(self, update: Update, context: CallbackContext):
-        await update.message.reply_text("🚀 Bot başarıyla çalıştı! Emirlerinizi bekliyorum.")
+        await update.message.reply_text("🤖 Protokolos Bot Aktif!\n\nSistem Render üzerinde stabil çalışıyor.")
 
     async def run(self):
-        """
-        Render için optimize edilmiş asenkron başlatıcı.
-        run_polling() yerine initialize/start metodlarını manuel çağırır.
-        """
-        logger.info("Bot modülleri başlatılıyor...")
+        """Asenkron polling başlatıcı."""
+        logger.info("Modüller başlatılıyor...")
         
-        # 1. Uygulamayı hazırla
         await self.app.initialize()
-        
-        # 2. Botu başlat
         await self.app.start()
         
-        # 3. Mesajları dinlemeye başla (Polling)
-        # Burası kritik: run_polling yerine start_polling kullanıyoruz
+        # start_polling, mevcut event loop içinde çalışır
         await self.app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        
-        logger.info("🤖 BOT ŞU AN AKTİF!")
+        logger.info("🤖 BOT ŞU AN AKTİF VE DİNLİYOR!")
 
-        # 4. Botun kapanmasını engelle (Sonsuz döngü)
-        # Render'ın botu kapatmaması için asenkron bir bekleme ekliyoruz
+        # Kapanmayı engelle
         try:
             while True:
-                await asyncio.sleep(3600)  # Her saat başı döngüyü kontrol et
+                await asyncio.sleep(3600)
         except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.warning("Bot kapatılma sinyali aldı...")
+            logger.warning("Bot kapatılıyor...")
         finally:
-            # Temiz bir kapanış yap
             await self.app.updater.stop()
             await self.app.stop()
             await self.app.shutdown()
@@ -65,33 +73,19 @@ async def main():
     cfg = Config()
     
     if not cfg.TELEGRAM_BOT_TOKEN:
-        logger.error("HATA: TELEGRAM_BOT_TOKEN ortam değişkeni bulunamadı!")
+        logger.error("HATA: TELEGRAM_BOT_TOKEN eksik!")
         return
 
+    # 1. Adım: Render'ı kandırmak için HTTP sunucusunu ayrı bir thread'de başlat
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    # 2. Adım: Botu asenkron olarak çalıştır
     bot = TelegramBot(cfg)
     await bot.run()
 
 if __name__ == "__main__":
-    # Python 3.14+ ve Render uyumluluğu için
     try:
         asyncio.run(main())
     except Exception as e:
-        logger.critical(f"Beklenmeyen bir hata oluştu: {e}")
+        logger.critical(f"Kritik hata: {e}")
         sys.exit(1)
-import http.server
-import socketserver
-import threading
-
-# Render'ın "port bulamadım" hatasını engellemek için sahte bir sunucu
-def start_dummy_server():
-    PORT = int(os.environ.get("PORT", 8080))
-    Handler = http.server.SimpleHTTPRequestHandler
-    with socketserver.TCPServer(("", PORT), Handler) as httpd:
-        logger.info(f"Sahte sunucu {PORT} portunda başlatıldı (Render için).")
-        httpd.serve_forever()
-
-# main() fonksiyonunun hemen içinde bot.run()'dan önce şunu çağır:
-async def main():
-    # ... diğer kodlar ...
-    threading.Thread(target=start_dummy_server, daemon=True).start()
-    await bot.run()
