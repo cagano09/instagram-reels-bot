@@ -6,12 +6,6 @@
 ║  Bu bot, Render'da sorunsuz çalışacak minimum versiyondur.                  ║
 ║  Video özellikleri devre dışı bırakılmıştır.                               ║
 ║                                                                              ║
-║  Özellikler:                                                                 ║
-║  • Telegram bot kontrolü                                                    ║
-║  • RSS feed'lerden içerik toplama                                          ║
-║  • Groq AI ile senaryo üretme                                               ║
-║  • Pexels'tan video arama (indirme devre dışı)                             ║
-║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -20,9 +14,9 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
+import sys
 import re
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -39,21 +33,49 @@ from telegram.ext import (
 from loguru import logger
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# LOGLAMA - Önce loglamayı kur
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def setup_logging():
+    """Loglama sistemini kurar"""
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+        level="DEBUG"
+    )
+    logger.add(
+        "bot.log",
+        rotation="10 MB",
+        retention="7 days",
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}"
+    )
+    return logger
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # YAPILANDIRMA - Ortam değişkenlerini yükle
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Ortam değişkenlerini yükle (python-dotenv yerine manuel)
 def load_env():
     """Ortam değişkenlerini .env dosyasından yükle"""
     env_path = Path(".env")
     if env_path.exists():
+        logger.info(".env dosyası bulundu, yükleniyor...")
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), value.strip())
+                    try:
+                        key, value = line.split("=", 1)
+                        os.environ.setdefault(key.strip(), value.strip())
+                        logger.debug(f"  {key.strip()} = ***")
+                    except:
+                        pass
+    else:
+        logger.warning(".env dosyası bulunamadı")
 
+# Ortam değişkenlerini yükle
 load_env()
 
 # Telegram Ayarları
@@ -75,20 +97,6 @@ RSS_FEEDS = os.getenv(
 REDDIT_SUBREDDITS = os.getenv("REDDIT_SUBREDDITS", "technology,programming,artificial").split(",")
 
 CONTENT_NICHE = os.getenv("CONTENT_NICHE", "technology")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LOGLAMA
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def setup_logging():
-    """Loglama sistemini kurar"""
-    logger.remove()
-    logger.add(
-        __file__,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-        level="INFO"
-    )
-    return logger
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # YARDIMCI SINIFLAR
@@ -121,47 +129,63 @@ class Database:
     """Basit SQLite veritabanı"""
 
     def __init__(self):
+        logger.info("Veritabanı başlatılıyor...")
         self.db_path = Path("data") / "bot.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Veritabanı yolu: {self.db_path}")
         self.init_db()
+        logger.info("Veritabanı hazır")
 
     def init_db(self):
         """Veritabanını başlatır"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS contents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT,
-                    description TEXT,
-                    url TEXT,
-                    source TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            conn.commit()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS contents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT,
+                        description TEXT,
+                        url TEXT,
+                        source TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.commit()
+                logger.debug("Veritabanı tabloları oluşturuldu")
+        except Exception as e:
+            logger.error(f"Veritabanı hatası: {e}")
+            raise
 
     def save_content(self, content: ContentItem) -> int:
         """İçeriği kaydeder"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO contents (title, description, url, source) VALUES (?, ?, ?, ?)",
-                (content.title, content.description, content.url, content.source)
-            )
-            conn.commit()
-            return cursor.lastrowid
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO contents (title, description, url, source) VALUES (?, ?, ?, ?)",
+                    (content.title, content.description, content.url, content.source)
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"İçerik kaydetme hatası: {e}")
+            return -1
 
     def get_recent_content(self, limit: int = 10) -> List[ContentItem]:
         """Son içerikleri getirir"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT title, description, url, source FROM contents ORDER BY id DESC LIMIT ?",
-                (limit,)
-            )
-            rows = cursor.fetchall()
-            return [ContentItem(r[0], r[1], r[2], r[3]) for r in rows]
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT title, description, url, source FROM contents ORDER BY id DESC LIMIT ?",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+                return [ContentItem(r[0], r[1], r[2], r[3]) for r in rows]
+        except Exception as e:
+            logger.error(f"İçerik getirme hatası: {e}")
+            return []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -175,6 +199,7 @@ class ContentFetcher:
         self.rss_feeds = RSS_FEEDS
         self.subreddits = REDDIT_SUBREDDITS
         self.keywords = self._get_keywords()
+        logger.info(f"Anahtar kelimeler: {self.keywords}")
 
     def _get_keywords(self) -> List[str]:
         """Nişe göre anahtar kelimeleri döndürür"""
@@ -187,9 +212,11 @@ class ContentFetcher:
 
     async def fetch_all(self) -> List[ContentItem]:
         """Tüm kaynaklardan içerik toplar"""
+        logger.info("İçerik toplama başladı")
         contents = []
 
         # RSS feed'lerden çek
+        logger.info(f"RSS feed'leri taranıyor: {len(self.rss_feeds)} feed")
         for feed_url in self.rss_feeds:
             try:
                 feed = feedparser.parse(feed_url)
@@ -207,6 +234,7 @@ class ContentFetcher:
                 logger.error(f"RSS hatası ({feed_url}): {e}")
 
         # Reddit'ten çek
+        logger.info(f"Reddit subreddit'leri taranıyor: {len(self.subreddits)}")
         for subreddit in self.subreddits:
             try:
                 url = f"https://www.reddit.com/r/{subreddit}/hot.json"
@@ -237,6 +265,7 @@ class ContentFetcher:
                 seen.add(c.title)
                 unique.append(c)
 
+        logger.info(f"Toplam {len(unique)} benzersiz içerik bulundu")
         return unique[:20]
 
     def _matches_keywords(self, title: str, text: str) -> bool:
@@ -265,9 +294,12 @@ class AIContentGenerator:
     def __init__(self):
         self.api_key = GROQ_API_KEY
         self.model = GROQ_MODEL
+        logger.info(f"AI Generator başlatıldı (model: {self.model})")
 
     async def generate(self, content: ContentItem) -> GeneratedContent:
         """İçerikten senaryo üretir"""
+        logger.info(f"AI içerik üretiyor: {content.title[:50]}...")
+
         prompt = f"""Aşağıdaki haber veya bilgiyi Instagram Reels formatında içeriğe dönüştür:
 
 BAŞLIK: {content.title}
@@ -307,6 +339,7 @@ Lütfen şu formatta yanıt ver:
 
                 result = response.json()
                 content_text = result["choices"][0]["message"]["content"]
+                logger.info("AI içerik üretimi başarılı")
                 return self._parse_response(content_text, content)
 
         except Exception as e:
@@ -356,11 +389,12 @@ class PexelsSearch:
 
     def __init__(self):
         self.api_key = PEXELS_API_KEY
+        logger.info(f"Pexels başlatıldı (API Key: {'Var' if self.api_key else 'Yok'})")
 
     async def search_videos(self, query: str, limit: int = 5) -> List[dict]:
         """Video arar"""
         if not self.api_key:
-            logger.warning("Pexels API anahtarı yok")
+            logger.warning("Pexels API anahtarı yok, video aranamıyor")
             return []
 
         try:
@@ -386,35 +420,46 @@ class TelegramBot:
     """Ana Telegram bot sınıfı"""
 
     def __init__(self):
+        logger.info("Telegram Bot başlatılıyor...")
         self.app = None
         self.db = Database()
         self.fetcher = ContentFetcher()
         self.ai = AIContentGenerator()
         self.pexels = PexelsSearch()
         self.user_data = {}
+        logger.info("Tüm modüller başarıyla yüklendi")
 
     async def start(self):
         """Botu başlatır"""
-        setup_logging()
         logger.info("Bot başlatılıyor...")
+        logger.info(f"TELEGRAM_BOT_TOKEN uzunluğu: {len(TELEGRAM_BOT_TOKEN)} karakter")
 
         # Token kontrolü
         if not TELEGRAM_BOT_TOKEN:
             logger.error("TELEGRAM_BOT_TOKEN ayarlanmamış!")
-            return
+            raise ValueError("TELEGRAM_BOT_TOKEN ayarlanmamış!")
+
+        logger.info("Telegram Application oluşturuluyor...")
 
         # Application oluştur
-        self.app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        try:
+            self.app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            logger.info("Telegram Application oluşturuldu")
+        except Exception as e:
+            logger.error(f"Application oluşturma hatası: {e}")
+            raise
 
         # Handler'ları kaydet
+        logger.info("Handler'lar kaydediliyor...")
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler("fetch", self.cmd_fetch))
         self.app.add_handler(CommandHandler("generate", self.cmd_generate))
         self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+        logger.info("Handler'lar kaydedildi")
 
-        logger.info("Bot başarıyla başlatıldı!")
+        logger.info("Bot çalışmaya başlıyor...")
         await self.app.run_polling(allowed_updates=Update.ALL_TYPES)
 
     async def cmd_start(self, update: Update, context: CallbackContext):
@@ -591,13 +636,18 @@ class TelegramBot:
 
 async def main():
     """Ana asenkron fonksiyon"""
+    logger.info("main() fonksiyonu başladı")
     bot = TelegramBot()
     try:
+        logger.info("Bot.start() çağrılıyor...")
         await bot.start()
     except KeyboardInterrupt:
-        logger.info("Bot kapatılıyor...")
+        logger.info("Bot kapatılıyor (KeyboardInterrupt)...")
     except Exception as e:
         logger.error(f"Beklenmeyen hata: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BAŞLANGIÇ
@@ -613,9 +663,18 @@ if __name__ == "__main__":
     print("Bot başlatılıyor...")
     print()
 
+    # Loglamayı kur
+    setup_logging()
+    logger.info("=== BOT BAŞLATILIYOR ===")
+    logger.info(f"Python sürümü: {sys.version}")
+    logger.info(f"Çalışma dizini: {os.getcwd()}")
+    logger.info(f"TELEGRAM_BOT_TOKEN mevcut: {'Evet' if TELEGRAM_BOT_TOKEN else 'Hayır'}")
+    logger.info(f"GROQ_API_KEY mevcut: {'Evet' if GROQ_API_KEY else 'Hayır'}")
+
     if not TELEGRAM_BOT_TOKEN:
         print("❌ HATA: TELEGRAM_BOT_TOKEN ayarlanmamış!")
         print("   Lütfen .env dosyasını oluşturun veya ortam değişkenlerini ayarlayın.")
+        print("   Render'da Environment Variables bölümünde TELEGRAM_BOT_TOKEN ekleyin.")
         exit(1)
 
     print("✅ Yapılandırma doğrulandı")
