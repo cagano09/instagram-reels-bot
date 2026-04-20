@@ -78,3 +78,20 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Beklenmeyen bir hata oluştu: {e}")
         sys.exit(1)
+import http.server
+import socketserver
+import threading
+
+# Render'ın "port bulamadım" hatasını engellemek için sahte bir sunucu
+def start_dummy_server():
+    PORT = int(os.environ.get("PORT", 8080))
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        logger.info(f"Sahte sunucu {PORT} portunda başlatıldı (Render için).")
+        httpd.serve_forever()
+
+# main() fonksiyonunun hemen içinde bot.run()'dan önce şunu çağır:
+async def main():
+    # ... diğer kodlar ...
+    threading.Thread(target=start_dummy_server, daemon=True).start()
+    await bot.run()
