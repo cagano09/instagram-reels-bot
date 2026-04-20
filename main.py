@@ -16,6 +16,7 @@ from telegram.ext import Application, CommandHandler, CallbackContext
 # --- YAPILANDIRMA ---
 class Config:
     def __init__(self):
+        # Render panelindeki Environment Variables'dan çekilir
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
         self.PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
@@ -24,7 +25,7 @@ class Config:
 class ContentEngine:
     def __init__(self, cfg):
         self.cfg = cfg
-        # Hatalı 'proxies' parametresinden kaçınmak için en sade kurulum
+        # Groq istemcisini en sade haliyle başlatıyoruz
         if cfg.GROQ_API_KEY:
             self.groq_client = Groq(api_key=cfg.GROQ_API_KEY)
         else:
@@ -39,14 +40,14 @@ class ContentEngine:
                 if feed.entries:
                     return {"title": feed.entries[0].title, "link": feed.entries[0].link}
         except Exception as e:
-            logger.error(f"Reddit hatası: {e}")
+            logger.error(f"Reddit Hatası: {e}")
         return None
 
     def process_with_groq(self, news_title):
         if not self.groq_client:
-            return "API Hatası: Groq anahtarı bulunamadı."
+            return "Gündem haberi oluşturulamadı, anahtar eksik."
         
-        prompt = f"Aşağıdaki teknoloji haberini heyecanlı, viral bir Reels videosu için Türkçe özetle. Sadece seslendirilecek metni ver. Haber: {news_title}"
+        prompt = f"Şu haberi viral bir Reels videosu için heyecanlı bir dille Türkçe özetle. Sadece seslendirilecek metni ver: {news_title}"
         try:
             completion = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -54,10 +55,10 @@ class ContentEngine:
             )
             return completion.choices[0].message.content
         except Exception as e:
-            logger.error(f"Groq hatası: {e}")
-            return f"Günün önemli teknoloji haberi: {news_title}"
+            logger.error(f"Groq Hatası: {e}")
+            return f"Günün öne çıkan haberi: {news_title}"
 
-    async def fetch_pexels_video(self, query="modern technology"):
+    async def fetch_pexels_video(self, query="cyberpunk technology"):
         if not self.cfg.PEXELS_API_KEY:
             return None
         
@@ -70,92 +71,98 @@ class ContentEngine:
                 if data.get('videos'):
                     return data['videos'][0]['video_files'][0]['link']
         except Exception as e:
-            logger.error(f"Pexels hatası: {e}")
+            logger.error(f"Pexels Hatası: {e}")
         return None
 
-# --- RENDER PORT DİNLEYİCİ ---
+# --- RENDER PORT DİNLEYİCİ (8080 yerine 10000 denemesi) ---
 def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     handler = http.server.SimpleHTTPRequestHandler
     socketserver.TCPServer.allow_reuse_address = True
     try:
         with socketserver.TCPServer(("", port), handler) as httpd:
-            logger.info(f"✅ Port {port} üzerinden Render bağlantısı aktif.")
+            logger.info(f"✅ Port {port} aktif. Render hazır.")
             httpd.serve_forever()
     except Exception as e:
-        logger.error(f"Sunucu hatası: {e}")
+        logger.error(f"Sunucu Hatası: {e}")
 
-# --- TELEGRAM BOT ---
+# --- TELEGRAM BOT SINIFI ---
 class TelegramBot:
     def __init__(self, cfg):
         self.cfg = cfg
         self.engine = ContentEngine(cfg)
-        self.app = Application.builder().token(cfg.TELEGRAM_BOT_TOKEN).build()
         
-        # Komutlar
+        # KRİTİK GÜNCELLEME: Python 3.14 uyumluluğu için job_queue(None) eklendi
+        self.app = (
+            Application.builder()
+            .token(cfg.TELEGRAM_BOT_TOKEN)
+            .job_queue(None) 
+            .build()
+        )
+        
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("teknoviral", self.cmd_teknoviral))
 
     async def cmd_start(self, update: Update, context: CallbackContext):
-        await update.message.reply_text("🤖 Protokolos Viral Bot Aktif!\n\n/teknoviral yazarak Reddit gündemini sesli video olarak alabilirsin.")
+        await update.message.reply_text("🚀 Protokolos Hazır!\n\n/teknoviral yazarak Reddit gündemini sesli video olarak alabilirsin.")
 
     async def cmd_teknoviral(self, update: Update, context: CallbackContext):
-        status = await update.message.reply_text("🌐 Reddit taranıyor...")
+        status = await update.message.reply_text("🌐 Veriler çekiliyor...")
         
         try:
-            # 1. Haber Çek
+            # 1. Reddit
             news = await self.engine.get_reddit_news()
             if not news:
-                await status.edit_text("❌ Haber alınamadı.")
+                await status.edit_text("❌ Haber bulunamadı.")
                 return
 
-            # 2. İşle ve Seslendir
-            await status.edit_text("🎙️ Türkçe seslendirme hazırlanıyor...")
+            # 2. Groq & TTS
+            await status.edit_text("🎙️ Seslendiriliyor...")
             metin = self.engine.process_with_groq(news['title'])
-            
-            file_id = update.message.message_id
-            audio_path = f"audio_{file_id}.mp3"
-            
+            audio_file = f"audio_{update.message.message_id}.mp3"
             tts = gTTS(text=metin, lang='tr')
-            tts.save(audio_path)
+            tts.save(audio_file)
 
-            # 3. Video Bul
-            await status.edit_text("🎬 Arka plan videosu seçiliyor...")
+            # 3. Pexels Video
+            await status.edit_text("🎬 Video arka planı hazırlanıyor...")
             video_url = await self.engine.fetch_pexels_video()
 
-            # 4. Gönder
-            caption = f"📰 **Gündem:** {news['title']}\n\n🔗 [Reddit Kaynağı]({news['link']})"
+            # 4. Gönderim
+            caption = f"📰 **Gündem:** {news['title']}\n\n🔗 [Kaynağa Git]({news['link']})"
             
             if video_url:
                 await update.message.reply_video(video=video_url, caption=caption, parse_mode="Markdown")
             
-            with open(audio_path, "rb") as audio:
-                await update.message.reply_audio(audio=audio, title="Tekno Haber Sesli")
+            with open(audio_file, "rb") as audio:
+                await update.message.reply_audio(audio=audio, title="Teknoloji Gündemi")
 
             # Temizlik
-            if os.path.exists(audio_path):
-                os.remove(audio_path)
+            if os.path.exists(audio_file):
+                os.remove(audio_file)
             await status.delete()
 
         except Exception as e:
-            logger.error(f"İşlem hatası: {e}")
-            await status.edit_text(f"⚠️ Bir hata oluştu: {e}")
+            logger.error(f"İşlem Hatası: {e}")
+            await status.edit_text(f"⚠️ Hata oluştu: {str(e)}")
 
     def run(self):
-        logger.info("🚀 Bot polling modunda başlatıldı.")
+        logger.info("📡 Bot dinlemeye başladı...")
         self.app.run_polling(drop_pending_updates=True)
 
-# --- ANA GİRİŞ ---
+# --- ANA PROGRAM ---
 if __name__ == "__main__":
     cfg = Config()
     
     if not cfg.TELEGRAM_BOT_TOKEN:
-        logger.critical("TELEGRAM_BOT_TOKEN eksik!")
+        logger.critical("HATA: Bot Token bulunamadı!")
         sys.exit(1)
 
-    # Arka planda sunucuyu başlat (Render çökmemesi için)
+    # Render için HTTP sunucusunu arka planda başlat
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    # Botu çalıştır
+    # Bot motorunu çalıştır
     bot = TelegramBot(cfg)
-    bot.run()
+    try:
+        bot.run()
+    except Exception as e:
+        logger.error(f"Bot durduruldu: {e}")
