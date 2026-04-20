@@ -7,7 +7,7 @@ import feedparser
 import httpx
 import random
 import asyncio
-import edge_tts  # Yeni ses kütüphanesi
+import edge_tts  # Yeni ses kütüphanemiz
 from loguru import logger
 from groq import Groq
 from telegram import Update
@@ -16,6 +16,7 @@ from telegram.ext import Application, CommandHandler, CallbackContext
 # --- YAPILANDIRMA ---
 class Config:
     def __init__(self):
+        # Render Environment Variables'dan çekilir
         self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
         self.PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
@@ -26,6 +27,7 @@ class ContentEngine:
         self.groq_client = Groq(api_key=cfg.GROQ_API_KEY) if cfg.GROQ_API_KEY else None
 
     async def get_google_tech_news(self):
+        # Türkçe haberleri ve Türkiye gündemini önceliklendirir
         url = "https://news.google.com/rss/search?q=technology+breakthrough+OR+ai+news+when:1d&hl=tr&gl=TR&ceid=TR:tr"
         headers = {'User-Agent': 'Mozilla/5.0'}
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -41,13 +43,11 @@ class ContentEngine:
         return None
 
     def process_with_groq(self, news_title):
-        # Tamamen Türkçe ve doğal konuşma akışı için güncellenen prompt
+        # Doğal ve akıcı Türkçe için optimize edilmiş prompt
         prompt = (
-            f"Sen bir teknoloji içerik üreticisisin. Aşağıdaki haberi, YouTube Shorts veya Instagram Reels videosu için "
-            f"tamamen doğal, heyecanlı ve akıcı bir Türkçeyle anlat. "
-            f"Cümleler kısa ve etkileyici olsun. Yabancı terimleri Türkçe karşılıklarıyla kullanmaya çalış. "
-            f"Sadece seslendirilecek konuşma metnini ver, 'Merhaba' veya 'Giriş' gibi başlıklar ekleme. "
-            f"Haber başlığı: {news_title}"
+            f"Sen bir teknoloji uzmanı ve içerik üreticisisin. Aşağıdaki haberi, izleyicileri heyecanlandıracak "
+            f"akıcı, doğal ve profesyonel bir Türkçeyle özetle. Cümleler kısa, anlaşılır ve etkileyici olsun. "
+            f"Seslendirme yaklaşık 30-40 saniye sürecek şekilde detaylandır. Sadece konuşma metnini ver: {news_title}"
         )
         try:
             completion = self.groq_client.chat.completions.create(
@@ -58,9 +58,10 @@ class ContentEngine:
         except:
             return f"Teknoloji dünyasında bugün çok önemli bir gelişme var. İşte detaylar: {news_title}"
 
-    async def fetch_pexels_video(self, query="high tech"):
+    async def fetch_pexels_video(self, query="future technology"):
         if not self.cfg.PEXELS_API_KEY: return None
         headers = {"Authorization": self.cfg.PEXELS_API_KEY}
+        # Uzun ve dikey (portrait) videoları tara
         url = f"https://api.pexels.com/videos/search?query={query}&per_page=20&orientation=portrait&size=large"
         
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -68,7 +69,7 @@ class ContentEngine:
                 response = await client.get(url, headers=headers)
                 data = response.json()
                 if data.get('videos'):
-                    # En az 30 saniyelik videoları bul
+                    # En az 30 saniyelik videoları filtrele
                     long_videos = [v for v in data['videos'] if v.get('duration', 0) >= 30]
                     if not long_videos:
                         long_videos = sorted(data['videos'], key=lambda x: x.get('duration', 0), reverse=True)
@@ -89,15 +90,16 @@ class TelegramBot:
     def __init__(self, cfg):
         self.cfg = cfg
         self.engine = ContentEngine(cfg)
+        # Python 3.11/3.14 uyumluluğu için job_queue devre dışı
         self.app = Application.builder().token(cfg.TELEGRAM_BOT_TOKEN).job_queue(None).build()
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("teknoviral", self.cmd_teknoviral))
 
     async def cmd_start(self, update: Update, context: CallbackContext):
-        await update.message.reply_text("🚀 Protokolos Hazır! /teknoviral ile profesyonel Türkçe içerikler üretebilirsin.")
+        await update.message.reply_text("🚀 Protokolos Hazır! /teknoviral ile kaliteli videolar üretebilirsin.")
 
     async def cmd_teknoviral(self, update: Update, context: CallbackContext):
-        status = await update.message.reply_text("🎬 Profesyonel video ve erkek sesi hazırlanıyor...")
+        status = await update.message.reply_text("🎬 Uzun video ve profesyonel erkek sesi hazırlanıyor...")
         
         try:
             news = await self.engine.get_google_tech_news()
@@ -108,13 +110,13 @@ class TelegramBot:
             metin = self.engine.process_with_groq(news['title'])
             audio_path = f"audio_{update.message.message_id}.mp3"
             
-            # --- PROFESYONEL ERKEK SESİ (Microsoft Ahmet) ---
+            # --- PROFESYONEL TÜRKÇE ERKEK SESİ ---
             communicate = edge_tts.Communicate(metin, "tr-TR-AhmetNeural")
             await communicate.save(audio_path)
 
             video_url = await self.engine.fetch_pexels_video()
             
-            caption = f"📹 **Günün Gündemi:** {news['title']}\n\n🎙️ **Özet:** {metin}"
+            caption = f"📹 **Günün Gündemi:** {news['title']}\n\n🎙️ **Analiz:** {metin}"
             
             if video_url:
                 sent_video = await update.message.reply_video(
@@ -130,19 +132,20 @@ class TelegramBot:
                         reply_to_message_id=sent_video.message_id
                     )
             else:
-                await update.message.reply_text("Video bulunamadı, haber metni hazırlandı.")
+                await update.message.reply_text(f"{caption}\n\n(Hata: Video bulunamadı.)")
 
             if os.path.exists(audio_path): os.remove(audio_path)
             await status.delete()
 
         except Exception as e:
-            logger.error(f"Hata: {e}")
+            logger.error(f"İşlem Hatası: {e}")
             await status.edit_text(f"⚠️ Bir hata oluştu: {str(e)}")
 
     def run(self):
+        logger.info("📡 Bot komutları dinliyor...")
         self.app.run_polling(drop_pending_updates=True)
 
-# --- RENDER SERVER ---
+# --- RENDER PORT DİNLEYİCİ ---
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     with socketserver.TCPServer(("", port), http.server.SimpleHTTPRequestHandler) as httpd:
@@ -150,5 +153,12 @@ def run_dummy_server():
 
 if __name__ == "__main__":
     cfg = Config()
+    if not cfg.TELEGRAM_BOT_TOKEN:
+        sys.exit(1)
+
+    # Render'ın "Live" kalması için arka planda sunucuyu başlat
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    TelegramBot(cfg).run()
+
+    # Botu çalıştır
+    bot = TelegramBot(cfg)
+    bot.run()
