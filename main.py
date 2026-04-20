@@ -1,10 +1,10 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
-║           INSTAGRAM REELS BOT - MINIMUM VERSİYON                           ║
+║           INSTAGRAM REELS BOT - GÜVENİLİR VERSİYON                          ║
 ║                                                                              ║
-║  Bu bot, Render'da sorunsuz çalışacak minimum versiyondur.                  ║
-║  Video özellikleri devre dışı bırakılmıştır.                               ║
+║  Render deployment için optimize edilmiş, hata yakalayıcılı versiyon.       ║
+║  Tüm modüller ayrı ayrı başlatılır ve hatalar detaylı loglanır.             ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
@@ -17,86 +17,220 @@ import os
 import sys
 import re
 import sqlite3
+import traceback
 from pathlib import Path
-from typing import List
-
-import httpx
-import feedparser
-from bs4 import BeautifulSoup
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CallbackContext,
-    CallbackQueryHandler,
-    CommandHandler,
-)
-from loguru import logger
+from typing import List, Optional, Dict, Any
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LOGLAMA - Önce loglamayı kur
+# LOGLAMA SİSTEMİ - ÖNCE KURULMALIDIR
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def setup_logging():
-    """Loglama sistemini kurar"""
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
-        level="DEBUG"
-    )
-    logger.add(
-        "bot.log",
-        rotation="10 MB",
-        retention="7 days",
-        level="DEBUG",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}"
-    )
-    return logger
+def setup_logging() -> None:
+    """
+    Loglama sistemini kurar.
+    Render'da görünmesi için sys.stderr'e yazar.
+    """
+    try:
+        # Varolan handler'ları temizle
+        try:
+            from loguru import logger
+            logger.remove()
+        except:
+            pass
+        
+        # Konsola (stderr) yaz - Render loglarında görünür
+        sys.stderr.write(">>> Loglama sistemi kuruluyor...\n")
+        sys.stderr.flush()
+        
+        try:
+            from loguru import logger
+            
+            # Konsol çıktısı
+            logger.add(
+                sys.stderr,
+                format="<red>{time:YYYY-MM-DD HH:mm:ss}</red> | <level>{level: <8}</level> | <level>{message}</level>",
+                level="DEBUG",
+                colorize=True
+            )
+            
+            # Dosya çıktısı (opsiyonel)
+            log_file = Path("logs") / "bot.log"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            logger.add(
+                str(log_file),
+                rotation="10 MB",
+                retention="7 days",
+                level="DEBUG",
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}"
+            )
+            
+            sys.stderr.write(">>> Loglama sistemi başarıyla kuruldu\n")
+            sys.stderr.flush()
+            
+        except ImportError:
+            # loguru yoksa standart logging kullan
+            import logging
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format="%(asctime)s | %(levelname)-8s | %(message)s",
+                handlers=[
+                    logging.StreamHandler(sys.stderr),
+                    logging.FileHandler("bot.log", encoding="utf-8")
+                ]
+            )
+            sys.stderr.write(">>> loguru bulunamadı, standart logging kullanılıyor\n")
+            sys.stderr.flush()
+            
+    except Exception as e:
+        sys.stderr.write(f"!!! Loglama kurulum hatası: {e}\n")
+        sys.stderr.flush()
+
+# Loglamayı hemen kur
+setup_logging()
+
+# Loguru import et veya yoksa standart logger kullan
+try:
+    from loguru import logger
+    logger.info("Loguru loglama sistemi aktif")
+except ImportError:
+    import logging
+    logger = logging.getLogger("bot")
+    logger.info("Standart logging sistemi aktif")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# YAPILANDIRMA - Ortam değişkenlerini yükle
+# YAPILANDIRMA - ORTAM DEĞİŞKENLERİ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def load_env():
+def load_env_file() -> None:
     """Ortam değişkenlerini .env dosyasından yükle"""
     env_path = Path(".env")
+    
     if env_path.exists():
         logger.info(".env dosyası bulundu, yükleniyor...")
-        with open(env_path) as f:
+        sys.stderr.write(">>> .env dosyası yükleniyor...\n")
+        sys.stderr.flush()
+        
+        loaded_count = 0
+        with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     try:
                         key, value = line.split("=", 1)
                         os.environ.setdefault(key.strip(), value.strip())
-                        logger.debug(f"  {key.strip()} = ***")
-                    except:
-                        pass
+                        loaded_count += 1
+                    except Exception as e:
+                        logger.warning(f".env satırı atlandı: {line[:30]}... ({e})")
+        
+        logger.info(f"{loaded_count} ortam değişkeni .env'den yüklendi")
+        sys.stderr.write(f">>> {loaded_count} ortam değişkeni yüklendi\n")
+        sys.stderr.flush()
     else:
-        logger.warning(".env dosyası bulunamadı")
+        logger.warning(".env dosyası bulunamadı, sadece sistem ortam değişkenleri kullanılacak")
+        sys.stderr.write(">>> .env dosyası bulunamadı\n")
+        sys.stderr.flush()
 
 # Ortam değişkenlerini yükle
-load_env()
+load_env_file()
 
-# Telegram Ayarları
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+# ═══════════════════════════════════════════════════════════════════════════════
+# YAPILANDIRMA - DEĞİŞKENLERİ AL
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Groq AI Ayarları
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+class Config:
+    """Yapılandırma sınıfı - tüm ortam değişkenlerini yönetir"""
+    
+    def __init__(self):
+        logger.info("Yapılandırma yükleniyor...")
+        sys.stderr.write(">>> Yapılandırma yükleniyor...\n")
+        sys.stderr.flush()
+        
+        # Telegram
+        self.TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        
+        # Groq AI
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+        
+        # Pexels
+        self.PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
+        
+        # RSS Feeds
+        rss_raw = os.getenv(
+            "RSS_FEEDS",
+            "https://www.theverge.com/rss/index.xml,https://feeds.feedburner.com/TechCrunch/"
+        )
+        self.RSS_FEEDS = [f.strip() for f in rss_raw.split(",") if f.strip()]
+        
+        # Reddit
+        reddit_raw = os.getenv("REDDIT_SUBREDDITS", "technology,programming,artificial")
+        self.REDDIT_SUBREDDITS = [s.strip() for s in reddit_raw.split(",") if s.strip()]
+        
+        # Niş
+        self.CONTENT_NICHE = os.getenv("CONTENT_NICHE", "technology")
+        
+        # Veritabanı yolu
+        self.DB_PATH = Path("data") / "bot.db"
+        self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Log yapılandırması
+        self._log_config()
+        
+    def _log_config(self) -> None:
+        """Yapılandırmayı logla"""
+        logger.info("=" * 50)
+        logger.info("YAPILANDIRMA DURUMU")
+        logger.info("=" * 50)
+        
+        # Token durumlarını logla (değerleri değil, sadece mevcut mu yok mu)
+        logger.info(f"TELEGRAM_BOT_TOKEN: {'✓ Mevcut' if self.TELEGRAM_BOT_TOKEN else '✗ BULUNAMADI'}")
+        logger.info(f"GROQ_API_KEY: {'✓ Mevcut' if self.GROQ_API_KEY else '✗ BULUNAMADI'}")
+        logger.info(f"PEXELS_API_KEY: {'✓ Mevcut' if self.PEXELS_API_KEY else '✗ BULUNAMADI'}")
+        logger.info(f"Groq Model: {self.GROQ_MODEL}")
+        logger.info(f"RSS Feed Sayısı: {len(self.RSS_FEEDS)}")
+        logger.info(f"Reddit Subreddit Sayısı: {len(self.REDDIT_SUBREDDITS)}")
+        logger.info(f"İçerik Nişi: {self.CONTENT_NICHE}")
+        logger.info(f"Veritabanı: {self.DB_PATH}")
+        logger.info("=" * 50)
+        
+        # stderr'ye de yaz (Render için)
+        sys.stderr.write(f">>> TELEGRAM_BOT_TOKEN: {'OK' if self.TELEGRAM_BOT_TOKEN else 'MISSING'}\n")
+        sys.stderr.write(f">>> GROQ_API_KEY: {'OK' if self.GROQ_API_KEY else 'MISSING'}\n")
+        sys.stderr.write(f">>> PEXELS_API_KEY: {'OK' if self.PEXELS_API_KEY else 'MISSING'}\n")
+        sys.stderr.write(f">>> RSS_FEEDS: {len(self.RSS_FEEDS)} adet\n")
+        sys.stderr.write(f">>> REDDIT_SUBREDDITS: {len(self.REDDIT_SUBREDDITS)} adet\n")
+        sys.stderr.flush()
+    
+    def validate(self) -> tuple[bool, str]:
+        """Yapılandırmayı doğrula, gerekli değerleri kontrol et"""
+        errors = []
+        
+        if not self.TELEGRAM_BOT_TOKEN:
+            errors.append("TELEGRAM_BOT_TOKEN ayarlanmamış!")
+        elif len(self.TELEGRAM_BOT_TOKEN) < 10:
+            errors.append("TELEGRAM_BOT_TOKEN geçersiz!")
+            
+        if not self.GROQ_API_KEY:
+            errors.append("GROQ_API_KEY ayarlanmamış!")
+            
+        if not self.RSS_FEEDS:
+            errors.append("RSS_FEEDS boş!")
+            
+        if errors:
+            return False, "\n".join(errors)
+        return True, "Tüm gerekli yapılandırma mevcut"
+    
+    def get_keywords(self) -> List[str]:
+        """Nişe göre anahtar kelimeleri döndürür"""
+        keywords_map = {
+            "technology": ["tech", "ai", "software", "digital", "innovation", "startup", "app"],
+            "business": ["business", "finance", "market", "investment", "economy", "company"],
+            "science": ["science", "research", "discovery", "study", "experiment", "space"],
+        }
+        return keywords_map.get(self.CONTENT_NICHE, keywords_map["technology"])
 
-# Pexels Ayarları
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
-
-# İçerik Kaynakları
-RSS_FEEDS = os.getenv(
-    "RSS_FEEDS",
-    "https://www.theverge.com/rss/index.xml,https://feeds.feedburner.com/TechCrunch/"
-).split(",")
-
-REDDIT_SUBREDDITS = os.getenv("REDDIT_SUBREDDITS", "technology,programming,artificial").split(",")
-
-CONTENT_NICHE = os.getenv("CONTENT_NICHE", "technology")
+# Global config
+config: Optional[Config] = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # YARDIMCI SINIFLAR
@@ -109,6 +243,9 @@ class ContentItem:
         self.description = description
         self.url = url
         self.source = source
+    
+    def __repr__(self) -> str:
+        return f"<ContentItem: {self.title[:30]}...>"
 
 
 class GeneratedContent:
@@ -122,21 +259,31 @@ class GeneratedContent:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# VERİTABANI
+# VERİTABANI MODÜLÜ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Database:
-    """Basit SQLite veritabanı"""
-
-    def __init__(self):
-        logger.info("Veritabanı başlatılıyor...")
-        self.db_path = Path("data") / "bot.db"
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Veritabanı yolu: {self.db_path}")
-        self.init_db()
-        logger.info("Veritabanı hazır")
-
-    def init_db(self):
+    """Basit SQLite veritabanı - hata yakalayıcılı"""
+    
+    def __init__(self, db_path: Path):
+        logger.info(f"Veritabanı başlatılıyor: {db_path}")
+        sys.stderr.write(f">>> Veritabanı başlatılıyor: {db_path}\n")
+        sys.stderr.flush()
+        
+        self.db_path = db_path
+        self._initialized = False
+        
+        try:
+            self.init_db()
+            self._initialized = True
+            logger.info("Veritabanı başarıyla başlatıldı")
+        except Exception as e:
+            logger.error(f"Veritabanı başlatma hatası: {e}")
+            sys.stderr.write(f">>> Veritabanı HATASI: {e}\n")
+            sys.stderr.flush()
+            raise
+    
+    def init_db(self) -> None:
         """Veritabanını başlatır"""
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -152,13 +299,17 @@ class Database:
                     )
                 """)
                 conn.commit()
-                logger.debug("Veritabanı tabloları oluşturuldu")
+            logger.debug("Veritabanı tabloları hazır")
         except Exception as e:
-            logger.error(f"Veritabanı hatası: {e}")
+            logger.error(f"Tablo oluşturma hatası: {e}")
             raise
-
+    
     def save_content(self, content: ContentItem) -> int:
         """İçeriği kaydeder"""
+        if not self._initialized:
+            logger.error("Veritabanı henüz başlatılmadı!")
+            return -1
+            
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -171,9 +322,13 @@ class Database:
         except Exception as e:
             logger.error(f"İçerik kaydetme hatası: {e}")
             return -1
-
+    
     def get_recent_content(self, limit: int = 10) -> List[ContentItem]:
         """Son içerikleri getirir"""
+        if not self._initialized:
+            logger.error("Veritabanı henüz başlatılmadı!")
+            return []
+            
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -189,32 +344,29 @@ class Database:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# İÇERİK TOPLAYICI
+# İÇERİK TOPLAYICI MODÜLÜ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ContentFetcher:
     """RSS feed'lerden içerik toplayıcı"""
-
-    def __init__(self):
-        self.rss_feeds = RSS_FEEDS
-        self.subreddits = REDDIT_SUBREDDITS
-        self.keywords = self._get_keywords()
+    
+    def __init__(self, cfg: Config):
+        logger.info("ContentFetcher başlatılıyor...")
+        sys.stderr.write(">>> ContentFetcher başlatılıyor...\n")
+        sys.stderr.flush()
+        
+        self.rss_feeds = cfg.RSS_FEEDS
+        self.subreddits = cfg.REDDIT_SUBREDDITS
+        self.keywords = cfg.get_keywords()
+        
         logger.info(f"Anahtar kelimeler: {self.keywords}")
-
-    def _get_keywords(self) -> List[str]:
-        """Nişe göre anahtar kelimeleri döndürür"""
-        keywords_map = {
-            "technology": ["tech", "ai", "software", "digital", "innovation", "startup"],
-            "business": ["business", "finance", "market", "investment", "economy"],
-            "science": ["science", "research", "discovery", "study", "experiment"],
-        }
-        return keywords_map.get(CONTENT_NICHE, keywords_map["technology"])
-
+        logger.info("ContentFetcher başarıyla başlatıldı")
+    
     async def fetch_all(self) -> List[ContentItem]:
         """Tüm kaynaklardan içerik toplar"""
         logger.info("İçerik toplama başladı")
         contents = []
-
+        
         # RSS feed'lerden çek
         logger.info(f"RSS feed'leri taranıyor: {len(self.rss_feeds)} feed")
         for feed_url in self.rss_feeds:
@@ -232,7 +384,7 @@ class ContentFetcher:
                         ))
             except Exception as e:
                 logger.error(f"RSS hatası ({feed_url}): {e}")
-
+        
         # Reddit'ten çek
         logger.info(f"Reddit subreddit'leri taranıyor: {len(self.subreddits)}")
         for subreddit in self.subreddits:
@@ -256,7 +408,7 @@ class ContentFetcher:
                             ))
             except Exception as e:
                 logger.error(f"Reddit hatası (r/{subreddit}): {e}")
-
+        
         # Benzersiz olanları döndür
         seen = set()
         unique = []
@@ -264,20 +416,20 @@ class ContentFetcher:
             if c.title not in seen:
                 seen.add(c.title)
                 unique.append(c)
-
+        
         logger.info(f"Toplam {len(unique)} benzersiz içerik bulundu")
         return unique[:20]
-
+    
     def _matches_keywords(self, title: str, text: str) -> bool:
         """Anahtar kelime eşleşmesi kontrol eder"""
         combined = (title + " " + text).lower()
         return any(kw.lower() in combined for kw in self.keywords)
-
+    
     def _clean_html(self, html: str) -> str:
         """HTML temizler"""
         soup = BeautifulSoup(html, "html.parser")
         return soup.get_text().strip()
-
+    
     def _extract_domain(self, url: str) -> str:
         """Domain çıkarır"""
         match = re.search(r'https?://([^/]+)', url)
@@ -285,21 +437,33 @@ class ContentFetcher:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# AI İÇERİK ÜRETİCİ
+# AI İÇERİK ÜRETİCİ MODÜLÜ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AIContentGenerator:
     """Groq API ile içerik üretici"""
-
-    def __init__(self):
-        self.api_key = GROQ_API_KEY
-        self.model = GROQ_MODEL
+    
+    def __init__(self, cfg: Config):
+        logger.info("AIContentGenerator başlatılıyor...")
+        sys.stderr.write(">>> AIContentGenerator başlatılıyor...\n")
+        sys.stderr.flush()
+        
+        self.api_key = cfg.GROQ_API_KEY
+        self.model = cfg.GROQ_MODEL
+        
+        if not self.api_key:
+            logger.warning("GROQ_API_KEY ayarlanmamış, AI içerik üretimi çalışmayacak!")
+        
         logger.info(f"AI Generator başlatıldı (model: {self.model})")
-
+    
     async def generate(self, content: ContentItem) -> GeneratedContent:
         """İçerikten senaryo üretir"""
         logger.info(f"AI içerik üretiyor: {content.title[:50]}...")
-
+        
+        if not self.api_key:
+            logger.warning("Groq API anahtarı yok, fallback içerik döndürülüyor")
+            return self._fallback_content(content)
+        
         prompt = f"""Aşağıdaki haber veya bilgiyi Instagram Reels formatında içeriğe dönüştür:
 
 BAŞLIK: {content.title}
@@ -316,7 +480,7 @@ Lütfen şu formatta yanıt ver:
 
 ## HASHTAGLER
 [10 adet hashtag, virgülle ayrılmış]"""
-
+        
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -336,30 +500,36 @@ Lütfen şu formatta yanıt ver:
                     },
                     timeout=30.0
                 )
-
+                
                 result = response.json()
                 content_text = result["choices"][0]["message"]["content"]
                 logger.info("AI içerik üretimi başarılı")
                 return self._parse_response(content_text, content)
-
+        
         except Exception as e:
             logger.error(f"Groq API hatası: {e}")
-            # Fallback: basit içerik döndür
-            return GeneratedContent(
-                original=content,
-                headline=content.title[:100],
-                script=content.description[:300],
-                hashtags=["#teknoloji", "#haber", "#reels", "#viral", "#trend"]
-            )
-
+            sys.stderr.write(f">>> Groq API HATASI: {e}\n")
+            sys.stderr.flush()
+            return self._fallback_content(content)
+    
+    def _fallback_content(self, content: ContentItem) -> GeneratedContent:
+        """API başarısız olduğunda fallback içerik döndürür"""
+        logger.info("Fallback içerik üretiliyor")
+        return GeneratedContent(
+            original=content,
+            headline=content.title[:100],
+            script=content.description[:300] if content.description else "Bu konuda daha fazla bilgi için kaynağa göz atın.",
+            hashtags=["#teknoloji", "#haber", "#reels", "#viral", "#trend", "#instagood", "#ai", "#future"]
+        )
+    
     def _parse_response(self, response: str, original: ContentItem) -> GeneratedContent:
         """AI yanıtını ayrıştırır"""
         lines = response.strip().split("\n")
-
+        
         headline = original.title[:100]
-        script = original.description[:300]
+        script = original.description[:300] if original.description else ""
         hashtags = ["#teknoloji", "#haber", "#reels", "#viral", "#trend", "#instagood", "#ai", "#future"]
-
+        
         for line in lines:
             line = line.strip()
             if line.startswith("## BAŞLIK"):
@@ -376,93 +546,177 @@ Lütfen şu formatta yanıt ver:
                 elif len(hashtags) == 8:
                     hashtags = [f"#{tag.strip().replace('#', '')}" for tag in line.split(",") if tag.strip()]
                     hashtags = [h for h in hashtags if h] or ["#teknoloji", "#haber", "#reels", "#viral", "#trend"]
-
+        
         return GeneratedContent(original, headline, script, hashtags)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PEXELS ARAÇLARI
+# PEXELS MODÜLÜ (Video indirme devre dışı)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PexelsSearch:
     """Pexels video arama (video indirme devre dışı)"""
-
-    def __init__(self):
-        self.api_key = PEXELS_API_KEY
+    
+    def __init__(self, cfg: Config):
+        logger.info("PexelsSearch başlatılıyor...")
+        self.api_key = cfg.PEXELS_API_KEY
         logger.info(f"Pexels başlatıldı (API Key: {'Var' if self.api_key else 'Yok'})")
-
+    
     async def search_videos(self, query: str, limit: int = 5) -> List[dict]:
-        """Video arar"""
+        """Video arar - şu anda devre dışı"""
         if not self.api_key:
-            logger.warning("Pexels API anahtarı yok, video aranamıyor")
+            logger.debug("Pexels API anahtarı yok, video aranamıyor")
             return []
-
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "https://api.pexels.com/videos/search",
-                    headers={"Authorization": self.api_key},
-                    params={"query": query, "per_page": limit, "orientation": "portrait"},
-                    timeout=15.0
-                )
-                data = response.json()
-                return data.get("videos", [])
-        except Exception as e:
-            logger.error(f"Pexels arama hatası: {e}")
-            return []
+        
+        logger.debug(f"Pexels arama (devre dışı): {query}")
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TELEGRAM BOT
+# TELEGRAM BOT MODÜLÜ
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TelegramBot:
-    """Ana Telegram bot sınıfı"""
-
-    def __init__(self):
-        logger.info("Telegram Bot başlatılıyor...")
+    """Ana Telegram bot sınıfı - hata yakalayıcılı"""
+    
+    def __init__(self, cfg: Config):
+        logger.info("=" * 50)
+        logger.info("TELEGRAM BOT BAŞLATILIYOR")
+        logger.info("=" * 50)
+        sys.stderr.write("\n")
+        sys.stderr.write("╔═══════════════════════════════════════════════════════╗\n")
+        sys.stderr.write("║     TELEGRAM BOT BAŞLATILIYOR                          ║\n")
+        sys.stderr.write("╚═══════════════════════════════════════════════════════╝\n")
+        sys.stderr.flush()
+        
+        self.config = cfg
         self.app = None
-        self.db = Database()
-        self.fetcher = ContentFetcher()
-        self.ai = AIContentGenerator()
-        self.pexels = PexelsSearch()
-        self.user_data = {}
-        logger.info("Tüm modüller başarıyla yüklendi")
-
-    async def start(self):
+        self.db: Optional[Database] = None
+        self.fetcher: Optional[ContentFetcher] = None
+        self.ai: Optional[AIContentGenerator] = None
+        self.pexels: Optional[PexelsSearch] = None
+        self.user_data: Dict[int, Dict[str, Any]] = {}
+        
+        # Modülleri başlat
+        self._initialize_modules()
+    
+    def _initialize_modules(self) -> None:
+        """Tüm modülleri başlatır"""
+        logger.info("Modüller başlatılıyor...")
+        sys.stderr.write(">>> Modüller başlatılıyor...\n")
+        sys.stderr.flush()
+        
+        try:
+            # Veritabanı
+            logger.info("  - Veritabanı başlatılıyor...")
+            self.db = Database(self.config.DB_PATH)
+            logger.info("  ✓ Veritabanı hazır")
+            
+            # Content Fetcher
+            logger.info("  - ContentFetcher başlatılıyor...")
+            self.fetcher = ContentFetcher(self.config)
+            logger.info("  ✓ ContentFetcher hazır")
+            
+            # AI Generator
+            logger.info("  - AIContentGenerator başlatılıyor...")
+            self.ai = AIContentGenerator(self.config)
+            logger.info("  ✓ AIContentGenerator hazır")
+            
+            # Pexels
+            logger.info("  - PexelsSearch başlatılıyor...")
+            self.pexels = PexelsSearch(self.config)
+            logger.info("  ✓ PexelsSearch hazır")
+            
+            logger.info("Tüm modüller başarıyla başlatıldı")
+            sys.stderr.write(">>> Tüm modüller başarıyla başlatıldı\n")
+            sys.stderr.flush()
+            
+        except Exception as e:
+            logger.error(f"Modül başlatma hatası: {e}")
+            sys.stderr.write(f">>> MODÜL HATASI: {e}\n")
+            sys.stderr.write(f">>> {traceback.format_exc()}\n")
+            sys.stderr.flush()
+            raise
+    
+    async def start(self) -> None:
         """Botu başlatır"""
         logger.info("Bot başlatılıyor...")
-        logger.info(f"TELEGRAM_BOT_TOKEN uzunluğu: {len(TELEGRAM_BOT_TOKEN)} karakter")
-
+        sys.stderr.write(">>> Bot başlatılıyor...\n")
+        sys.stderr.flush()
+        
         # Token kontrolü
-        if not TELEGRAM_BOT_TOKEN:
-            logger.error("TELEGRAM_BOT_TOKEN ayarlanmamış!")
-            raise ValueError("TELEGRAM_BOT_TOKEN ayarlanmamış!")
-
-        logger.info("Telegram Application oluşturuluyor...")
-
-        # Application oluştur
+        if not self.config.TELEGRAM_BOT_TOKEN:
+            error_msg = "TELEGRAM_BOT_TOKEN ayarlanmamış!"
+            logger.error(error_msg)
+            sys.stderr.write(f">>> HATA: {error_msg}\n")
+            sys.stderr.flush()
+            raise ValueError(error_msg)
+        
+        logger.info(f"TELEGRAM_BOT_TOKEN mevcut ({len(self.config.TELEGRAM_BOT_TOKEN)} karakter)")
+        
         try:
-            self.app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            # Application oluştur
+            logger.info("Telegram Application oluşturuluyor...")
+            sys.stderr.write(">>> Telegram Application oluşturuluyor...\n")
+            sys.stderr.flush()
+            
+            from telegram import Update
+            from telegram.ext import (
+                Application,
+                CallbackContext,
+                CallbackQueryHandler,
+                CommandHandler,
+            )
+            
+            self.app = Application.builder().token(self.config.TELEGRAM_BOT_TOKEN).build()
+            
             logger.info("Telegram Application oluşturuldu")
+            sys.stderr.write(">>> Telegram Application oluşturuldu\n")
+            sys.stderr.flush()
+            
         except Exception as e:
-            logger.error(f"Application oluşturma hatası: {e}")
+            error_msg = f"Application oluşturma hatası: {e}"
+            logger.error(error_msg)
+            sys.stderr.write(f">>> HATA: {error_msg}\n")
+            sys.stderr.write(f">>> {traceback.format_exc()}\n")
+            sys.stderr.flush()
             raise
-
+        
         # Handler'ları kaydet
         logger.info("Handler'lar kaydediliyor...")
+        sys.stderr.write(">>> Handler'lar kaydediliyor...\n")
+        sys.stderr.flush()
+        
         self.app.add_handler(CommandHandler("start", self.cmd_start))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler("fetch", self.cmd_fetch))
         self.app.add_handler(CommandHandler("generate", self.cmd_generate))
         self.app.add_handler(CallbackQueryHandler(self.handle_callback))
+        
         logger.info("Handler'lar kaydedildi")
-
-        logger.info("Bot çalışmaya başlıyor...")
-        await self.app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-    async def cmd_start(self, update: Update, context: CallbackContext):
+        sys.stderr.write(">>> Handler'lar kaydedildi\n")
+        sys.stderr.flush()
+        
+        logger.info("=" * 50)
+        logger.info("🤖 BOT ÇALIŞMAYA BAŞLIYOR")
+        logger.info("=" * 50)
+        sys.stderr.write("\n")
+        sys.stderr.write("╔═══════════════════════════════════════════════════════╗\n")
+        sys.stderr.write("║     🤖 BOT ÇALIŞMAYA BAŞLIYOR                          ║\n")
+        sys.stderr.write("╚═══════════════════════════════════════════════════════╝\n")
+        sys.stderr.flush()
+        
+        try:
+            await self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+        except Exception as e:
+            logger.error(f"Polling hatası: {e}")
+            sys.stderr.write(f">>> POLLING HATASI: {e}\n")
+            sys.stderr.write(f">>> {traceback.format_exc()}\n")
+            sys.stderr.flush()
+            raise
+    
+    async def cmd_start(self, update: Update, context: CallbackContext) -> None:
         """Başlangıç komutu"""
         welcome = """
 ╔═══════════════════════════════════════════════════════════════╗
@@ -477,9 +731,12 @@ class TelegramBot:
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
         """
-        await update.message.reply_text(welcome)
-
-    async def cmd_help(self, update: Update, context: CallbackContext):
+        try:
+            await update.message.reply_text(welcome)
+        except Exception as e:
+            logger.error(f"Start komutu hatası: {e}")
+    
+    async def cmd_help(self, update: Update, context: CallbackContext) -> None:
         """Yardım komutu"""
         help_text = """
 📚 KULLANIM KILAVUZU
@@ -490,37 +747,49 @@ class TelegramBot:
 
 ⚙️ NOT: Video oluşturma özellikleri yakında eklenecek.
         """
-        await update.message.reply_text(help_text)
-
-    async def cmd_status(self, update: Update, context: CallbackContext):
+        try:
+            await update.message.reply_text(help_text)
+        except Exception as e:
+            logger.error(f"Help komutu hatası: {e}")
+    
+    async def cmd_status(self, update: Update, context: CallbackContext) -> None:
         """Durum komutu"""
         status = f"""
 📊 SİSTEM DURUMU
 
 🤖 Bot: ✅ Aktif
-📡 Groq AI: {'✅ Bağlı' if GROQ_API_KEY else '❌ Bağlı Değil'}
-🎬 Pexels: {'✅ Bağlı' if PEXELS_API_KEY else '⚠️ API Anahtarı Yok'}
+📡 Groq AI: {'✅ Bağlı' if self.config.GROQ_API_KEY else '❌ Bağlı Değil'}
+🎬 Pexels: {'✅ Bağlı' if self.config.PEXELS_API_KEY else '⚠️ API Anahtarı Yok'}
 📸 Instagram: ⚠️ Yapılandırılmadı (Video özellikleri devre dışı)
 📦 Veritabanı: ✅ Hazır
         """
-        await update.message.reply_text(status)
-
-    async def cmd_fetch(self, update: Update, context: CallbackContext):
+        try:
+            await update.message.reply_text(status)
+        except Exception as e:
+            logger.error(f"Status komutu hatası: {e}")
+    
+    async def cmd_fetch(self, update: Update, context: CallbackContext) -> None:
         """İçerik bulma komutu"""
         user_id = update.effective_user.id
-        await update.message.reply_text("📡 İçerikler araştırılıyor...")
-
+        
         try:
+            await update.message.reply_text("📡 İçerikler araştırılıyor...")
+            
+            if not self.fetcher:
+                await update.message.reply_text("❌ İçerik toplayıcı hazır değil.")
+                return
+            
             contents = await self.fetcher.fetch_all()
-
+            
             if not contents:
                 await update.message.reply_text("❌ Hiç içerik bulunamadı.")
                 return
-
+            
             # Veritabanına kaydet
             for c in contents:
-                self.db.save_content(c)
-
+                if self.db:
+                    self.db.save_content(c)
+            
             # İçerikleri göster
             keyboard = []
             for i, content in enumerate(contents[:10]):
@@ -528,66 +797,83 @@ class TelegramBot:
                 keyboard.append([
                     InlineKeyboardButton(f"📰 {title}", callback_data=f"view_{i}")
                 ])
-
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
-
+            
             await update.message.reply_text(
                 f"✅ **{len(contents)} içerik bulundu!**\n\nBir içerik seçin:",
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
-
+            
             self.user_data[user_id] = {"contents": contents}
-
+            
         except Exception as e:
-            logger.error(f"İçerik bulma hatası: {e}")
-            await update.message.reply_text(f"❌ Hata: {str(e)}")
-
-    async def cmd_generate(self, update: Update, context: CallbackContext):
+            logger.error(f"Fetch komutu hatası: {e}")
+            try:
+                await update.message.reply_text(f"❌ Hata: {str(e)}")
+            except:
+                pass
+    
+    async def cmd_generate(self, update: Update, context: CallbackContext) -> None:
         """İçerik üretme komutu"""
         user_id = update.effective_user.id
-
-        contents = self.db.get_recent_content(limit=10)
-
-        if not contents:
+        
+        try:
+            if not self.db:
+                await update.message.reply_text("❌ Veritabanı hazır değil.")
+                return
+            
+            contents = self.db.get_recent_content(limit=10)
+            
+            if not contents:
+                await update.message.reply_text(
+                    "❌ Henüz içerik yok.\n\nLütfen önce /fetch komutunu kullanın."
+                )
+                return
+            
+            keyboard = []
+            for i, content in enumerate(contents):
+                title = content.title[:40] + "..." if len(content.title) > 40 else content.title
+                keyboard.append([
+                    InlineKeyboardButton(f"✍️ {title}", callback_data=f"gen_{i}")
+                ])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await update.message.reply_text(
-                "❌ Henüz içerik yok.\n\nLütfen önce /fetch komutunu kullanın."
+                "✍️ **İçerik Üretimi**\n\nBir içerik seçin ve AI senaryo üretsin:",
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
             )
-            return
-
-        keyboard = []
-        for i, content in enumerate(contents):
-            title = content.title[:40] + "..." if len(content.title) > 40 else content.title
-            keyboard.append([
-                InlineKeyboardButton(f"✍️ {title}", callback_data=f"gen_{i}")
-            ])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(
-            "✍️ **İçerik Üretimi**\n\nBir içerik seçin ve AI senaryo üretsin:",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-
-        self.user_data[user_id] = {"contents": contents}
-
-    async def handle_callback(self, update: Update, context: CallbackContext):
+            
+            self.user_data[user_id] = {"contents": contents}
+            
+        except Exception as e:
+            logger.error(f"Generate komutu hatası: {e}")
+            try:
+                await update.message.reply_text(f"❌ Hata: {str(e)}")
+            except:
+                pass
+    
+    async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         """Callback işleyici"""
         query = update.callback_query
-        user_id = query.from_user.id
-        await query.answer()
-
-        data = query.data
-
-        if data.startswith("view_"):
-            # İçerik görüntüleme
-            index = int(data.split("_")[1])
-            if user_id in self.user_data and "contents" in self.user_data[user_id]:
-                contents = self.user_data[user_id]["contents"]
-                if index < len(contents):
-                    c = contents[index]
-                    text = f"""
+        
+        try:
+            user_id = query.from_user.id
+            await query.answer()
+            
+            data = query.data
+            
+            if data.startswith("view_"):
+                # İçerik görüntüleme
+                index = int(data.split("_")[1])
+                if user_id in self.user_data and "contents" in self.user_data[user_id]:
+                    contents = self.user_data[user_id]["contents"]
+                    if index < len(contents):
+                        c = contents[index]
+                        text = f"""
 📰 **{c.title}**
 
 {c.description[:200]}...
@@ -596,21 +882,21 @@ class TelegramBot:
 🔗 URL: {c.url}
 
 ✍️ Bu içerikten senaryo üretmek için /generate yazın.
-                    """
-                    await query.message.edit_text(text, parse_mode="Markdown")
-
-        elif data.startswith("gen_"):
-            # AI ile içerik üretme
-            index = int(data.split("_")[1])
-            if user_id in self.user_data and "contents" in self.user_data[user_id]:
-                contents = self.user_data[user_id]["contents"]
-                if index < len(contents):
-                    await query.message.edit_text("🤖 **AI içerik üretiyor...**")
-
-                    try:
-                        generated = await self.ai.generate(contents[index])
-
-                        text = f"""
+                        """
+                        await query.message.edit_text(text, parse_mode="Markdown")
+            
+            elif data.startswith("gen_"):
+                # AI ile içerik üretme
+                index = int(data.split("_")[1])
+                if user_id in self.user_data and "contents" in self.user_data[user_id]:
+                    contents = self.user_data[user_id]["contents"]
+                    if index < len(contents) and self.ai:
+                        await query.message.edit_text("🤖 **AI içerik üretiyor...**")
+                        
+                        try:
+                            generated = await self.ai.generate(contents[index])
+                            
+                            text = f"""
 ✅ **İçerik Üretildi!**
 
 📌 **Başlık:** {generated.headline}
@@ -622,64 +908,180 @@ class TelegramBot:
 {' '.join(generated.hashtags[:5])}...
 
 ⚙️ NOT: Video oluşturma özellikleri yakında eklenecek.
-                        """
-                        await query.message.edit_text(text, parse_mode="Markdown")
-
-                    except Exception as e:
-                        logger.error(f"İçerik üretme hatası: {e}")
-                        await query.message.edit_text(f"❌ Hata: {str(e)}")
+                            """
+                            await query.message.edit_text(text, parse_mode="Markdown")
+                            
+                        except Exception as e:
+                            logger.error(f"İçerik üretme hatası: {e}")
+                            await query.message.edit_text(f"❌ Hata: {str(e)}")
+                            
+        except Exception as e:
+            logger.error(f"Callback işleme hatası: {e}")
+            try:
+                await query.message.reply_text(f"❌ Bir hata oluştu: {str(e)}")
+            except:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ANA FONKSİYON
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main():
+async def main() -> None:
     """Ana asenkron fonksiyon"""
-    logger.info("main() fonksiyonu başladı")
-    bot = TelegramBot()
+    global config
+    
+    logger.info("=" * 60)
+    logger.info(">>> main() FONKSİYONU BAŞLADI")
+    logger.info("=" * 60)
+    sys.stderr.write("\n>>> main() başladı\n")
+    sys.stderr.flush()
+    
     try:
+        # Yapılandırmayı oluştur
+        logger.info("Yapılandırma oluşturuluyor...")
+        config = Config()
+        
+        # Yapılandırmayı doğrula
+        logger.info("Yapılandırma doğrulanıyor...")
+        is_valid, message = config.validate()
+        
+        if not is_valid:
+            logger.error(f"YAPILANDIRMA HATASI: {message}")
+            sys.stderr.write(f">>> YAPILANDIRMA HATASI: {message}\n")
+            sys.stderr.flush()
+            raise ValueError(f"Yapılandırma hatası: {message}")
+        
+        logger.info(f"✓ {message}")
+        sys.stderr.write(f">>> {message}\n")
+        sys.stderr.flush()
+        
+        # Botu oluştur ve başlat
+        logger.info("Bot oluşturuluyor...")
+        sys.stderr.write(">>> Bot oluşturuluyor...\n")
+        sys.stderr.flush()
+        
+        bot = TelegramBot(config)
+        
         logger.info("Bot.start() çağrılıyor...")
+        sys.stderr.write(">>> Bot.start() çağrılıyor...\n")
+        sys.stderr.flush()
+        
         await bot.start()
+        
     except KeyboardInterrupt:
         logger.info("Bot kapatılıyor (KeyboardInterrupt)...")
+        sys.stderr.write(">>> Bot kapatılıyor (KeyboardInterrupt)...\n")
+        sys.stderr.flush()
+        
+    except ValueError as e:
+        logger.error(f"Değer hatası: {e}")
+        sys.stderr.write(f">>> DEĞER HATASI: {e}\n")
+        sys.stderr.flush()
+        raise
+        
     except Exception as e:
         logger.error(f"Beklenmeyen hata: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        sys.stderr.write(f">>> BEKLENMEYEN HATA: {e}\n")
+        sys.stderr.write(f">>> Traceback:\n{traceback.format_exc()}\n")
+        sys.stderr.flush()
         raise
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# BAŞLANGIÇ
+# BAŞLANGIÇ NOKTASI
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # Banner
     print("╔═══════════════════════════════════════════════════════════════════════╗")
     print("║                                                                   ║")
-    print("║           INSTAGRAM REELS BOT - MINIMUM VERSİYON                    ║")
+    print("║           INSTAGRAM REELS BOT - GÜVENİLİR VERSİYON                   ║")
     print("║                                                                   ║")
     print("╚═══════════════════════════════════════════════════════════════════════╝")
     print()
-    print("Bot başlatılıyor...")
-    print()
-
-    # Loglamayı kur
-    setup_logging()
-    logger.info("=== BOT BAŞLATILIYOR ===")
-    logger.info(f"Python sürümü: {sys.version}")
-    logger.info(f"Çalışma dizini: {os.getcwd()}")
-    logger.info(f"TELEGRAM_BOT_TOKEN mevcut: {'Evet' if TELEGRAM_BOT_TOKEN else 'Hayır'}")
-    logger.info(f"GROQ_API_KEY mevcut: {'Evet' if GROQ_API_KEY else 'Hayır'}")
-
-    if not TELEGRAM_BOT_TOKEN:
-        print("❌ HATA: TELEGRAM_BOT_TOKEN ayarlanmamış!")
-        print("   Lütfen .env dosyasını oluşturun veya ortam değişkenlerini ayarlayın.")
-        print("   Render'da Environment Variables bölümünde TELEGRAM_BOT_TOKEN ekleyin.")
-        exit(1)
-
-    print("✅ Yapılandırma doğrulandı")
-    print("📡 Bot başlatılıyor...")
-    print()
-
-    import asyncio
-    asyncio.run(main())
+    
+    # Sistem bilgileri
+    sys.stderr.write(f">>> Python: {sys.version}\n")
+    sys.stderr.write(f">>> Çalışma dizini: {os.getcwd()}\n")
+    sys.stderr.write(f">>> Platform: {sys.platform}\n")
+    sys.stderr.flush()
+    
+    logger.info("=" * 60)
+    logger.info("INSTAGRAM REELS BOT BAŞLATILIYOR")
+    logger.info("=" * 60)
+    
+    # Ana modülleri import et
+    logger.info("Ana modüller import ediliyor...")
+    sys.stderr.write(">>> Modüller import ediliyor...\n")
+    sys.stderr.flush()
+    
+    try:
+        import httpx
+        logger.info(f"✓ httpx {httpx.__version__}")
+    except ImportError as e:
+        logger.error(f"httpx import hatası: {e}")
+        sys.stderr.write(f">>> httpx HATASI: {e}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    
+    try:
+        import feedparser
+        logger.info("✓ feedparser")
+    except ImportError as e:
+        logger.error(f"feedparser import hatası: {e}")
+        sys.stderr.write(f">>> feedparser HATASI: {e}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    
+    try:
+        from bs4 import BeautifulSoup
+        logger.info("✓ BeautifulSoup")
+    except ImportError as e:
+        logger.error(f"BeautifulSoup import hatası: {e}")
+        sys.stderr.write(f">>> BeautifulSoup HATASI: {e}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    
+    try:
+        import telegram
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+        from telegram.ext import (
+            Application,
+            CallbackContext,
+            CallbackQueryHandler,
+            CommandHandler,
+        )
+        logger.info(f"✓ python-telegram-bot {telegram.__version__}")
+    except ImportError as e:
+        logger.error(f"python-telegram-bot import hatası: {e}")
+        sys.stderr.write(f">>> telegram HATASI: {e}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    
+    logger.info("Tüm modüller başarıyla import edildi")
+    sys.stderr.write(">>> Tüm modüller import edildi\n")
+    sys.stderr.flush()
+    
+    # Asenkron ana döngüyü çalıştır
+    logger.info("Asenkron ana döngü başlatılıyor...")
+    sys.stderr.write(">>> Asenkron ana döngü başlatılıyor...\n")
+    sys.stderr.flush()
+    
+    try:
+        import asyncio
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot kapatıldı (Ctrl+C)")
+        sys.stderr.write(">>> Bot kapatıldı (Ctrl+C)\n")
+        sys.stderr.flush()
+    except Exception as e:
+        logger.critical(f"Kritik hata: {e}")
+        sys.stderr.write(f">>> KRİTİK HATA: {e}\n")
+        sys.stderr.write(f">>> {traceback.format_exc()}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+    
+    logger.info("Bot kapatıldı")
+    sys.stderr.write(">>> Bot kapatıldı\n")
+    sys.stderr.flush()
